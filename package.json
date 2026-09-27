@@ -1,0 +1,21 @@
+{
+  "name": "pi-path-guard",
+  "version": "0.1.0",
+  "description": "Filesystem-backed path canonicalization and repository mutation containment for the Pi coding agent.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "coding-agent",
+    "path-safety",
+    "ai-agent"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
