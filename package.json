@@ -1,5 +1,5 @@
 {
-  "name": "pi-path-guard",
+  "name": "@m47791/pi-path-guard",
   "version": "0.1.0",
   "description": "Filesystem-backed path canonicalization and repository mutation containment for the Pi coding agent.",
   "license": "MIT",
