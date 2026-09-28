@@ -2,7 +2,7 @@
 //
 // Scope (per spec): at turn_end, only assistant messages are inspected. Any path-
 // like substring inside assistant text/thinking/tool-call arguments that an LLM
-// misspelled (e.g. `src/Kry xn.Core/Foo.cs`) is repaired to the real path using the
+// misspelled (e.g. `src/Mo dule/Tasks/Foo.cs`) is repaired to the real path using the
 // SAME filesystem-backed canonicalization authority Path Guard already relies on.
 //
 // Guarantees:

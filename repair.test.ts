@@ -3,6 +3,9 @@
 // These tests use REAL temporary filesystem fixtures so the filesystem-backed
 // canonicalization authority (resolveExistingPath / resolveWritePath) is exercised
 // end to end, exactly as it is during tool execution.
+//
+// All fixtures use generic names (AlphaModule, BetaModule) — no project-specific
+// identifiers anywhere in this file.
 
 import { test } from "bun:test";
 import { expect } from "bun:test";
@@ -27,9 +30,10 @@ import {
 
 function scaffold(): string {
     const base = mkdtempSync(join(tmpdir(), "pi-path-guard-"));
-    mkdirSync(join(base, "src/Kryxn.Core/Tasks"), { recursive: true });
-    writeFileSync(join(base, "src/Kryxn.Core/Tasks/Foo.cs"), "x");
-    writeFileSync(join(base, "src/Kryxn.Core/Tasks/Bar.cs"), "y");
+    // Create canonical files (no spaces in directory names) under AlphaModule
+    mkdirSync(join(base, "src/AlphaModule/Tasks"), { recursive: true });
+    writeFileSync(join(base, "src/AlphaModule/Tasks/Foo.cs"), "x");
+    writeFileSync(join(base, "src/AlphaModule/Tasks/Bar.cs"), "y");
     writeFileSync(join(base, "src/Notes.txt"), "z");
     return base;
 }
@@ -38,17 +42,18 @@ function scaffold(): string {
 test("A — absolute path spelling is repaired", () => {
     const base = scaffold();
     try {
-        const malformed = join(base, "src/Kry xn.Core/Tasks/Foo.cs");
+        // Broken absolute path: "Alpha Module" has a space → unique resolvable to AlphaModule
+        const broken = join(base, "src/Alpha Module/Tasks/Foo.cs");
         const { text, repairs } = repairPathSpansInText(
-            `editing ${malformed}`,
+            `editing ${broken}`,
             base
         );
         expect(repairs.length).toBe(1);
-        expect(text).toContain(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
-        expect(text).not.toContain("Kry xn.Core");
+        expect(text).toContain(join(base, "src/AlphaModule/Tasks/Foo.cs"));
+        expect(text).not.toContain("Alpha Module");
         expect(repairs.length).toBe(1);
-        expect(repairs[0].original).toBe(malformed);
-        expect(repairs[0].actual).toBe(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        expect(repairs[0].original).toBe(broken);
+        expect(repairs[0].actual).toBe(join(base, "src/AlphaModule/Tasks/Foo.cs"));
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
@@ -59,11 +64,11 @@ test("B — relative path spelling is repaired", () => {
     const base = scaffold();
     try {
         const { text, repairs } = repairPathSpansInText(
-            `reading src/Kry xn.Core/Tasks/Foo.cs now`,
+            `reading src/Alpha Module/Tasks/Foo.cs now`,
             base
         );
         expect(repairs.length).toBe(1);
-        expect(text).toContain("src/Kryxn.Core/Tasks/Foo.cs");
+        expect(text).toContain("src/AlphaModule/Tasks/Foo.cs");
         // a relative input stays relative (not rewritten to absolute)
         expect(text).not.toContain(base);
     } finally {
@@ -76,7 +81,7 @@ test("C — prose without a resolvable path is never rewritten", () => {
     const base = scaffold();
     try {
         const prose =
-            "I wonder whether Kry xn is the correct project name for this week's plan.";
+            "I wonder whether Alpha Mo d is the correct project name for this week's plan.";
         const { text, repairs } = repairPathSpansInText(prose, base);
         expect(repairs.length).toBe(0);
         expect(text).toBe(prose);
@@ -113,11 +118,11 @@ test("E — nonexistent spelling is left unchanged", () => {
     const base = scaffold();
     try {
         const { text, repairs } = repairPathSpansInText(
-            `reading src/Kry xn.Core/Tasks/Nope.cs`,
+            `reading src/Alpha Module/Tasks/Nope.cs`,
             base
         );
         expect(repairs.length).toBe(0);
-        expect(text).toBe(`reading src/Kry xn.Core/Tasks/Nope.cs`);
+        expect(text).toBe(`reading src/Alpha Module/Tasks/Nope.cs`);
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
@@ -128,7 +133,7 @@ test("F — context_edit draft shape + raw input preserved (non-mutation)", () =
     const base = scaffold();
     try {
         const content = [
-            { type: "text", text: "reading src/Kry xn.Core/Tasks/Foo.cs" },
+            { type: "text", text: "reading src/Alpha Module/Tasks/Foo.cs" },
         ];
         const before = JSON.stringify(content);
         const { content: repaired, changed, repairs } = repairAssistantContent(content, base);
@@ -159,7 +164,7 @@ test("G — tool-call identity, structure and unrelated args preserved", () => {
                 id: "call_read",
                 name: "read",
                 arguments: {
-                    path: join(base, "src/Kry xn.Core/Tasks/Foo.cs"),
+                    path: join(base, "src/Alpha Module/Tasks/Foo.cs"),
                     encoding: "utf-8",
                     line: 12,
                 },
@@ -170,7 +175,7 @@ test("G — tool-call identity, structure and unrelated args preserved", () => {
                 id: "call_bash",
                 name: "bash",
                 arguments: {
-                    command: `ls "${join(base, "src/Kry xn.Core/Tasks")}"`,
+                    command: `ls "${join(base, "src/Alpha Module/Tasks")}"`,
                     shell: "bash",
                 },
             },
@@ -186,14 +191,14 @@ test("G — tool-call identity, structure and unrelated args preserved", () => {
         expect(readCall).toBeDefined();
         expect(readCall.id).toBe("call_read");
         expect(readCall.thoughtSignature).toBe("sig_read");
-        expect(readCall.arguments.path).toBe(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        expect(readCall.arguments.path).toBe(join(base, "src/AlphaModule/Tasks/Foo.cs"));
         // unrelated arguments preserved
         expect(readCall.arguments.encoding).toBe("utf-8");
         expect(readCall.arguments.line).toBe(12);
 
         const bashCall = out.find((c: any) => c.name === "bash");
         expect(bashCall.arguments.command).toContain(
-            join(base, "src/Kryxn.Core/Tasks")
+            join(base, "src/AlphaModule/Tasks")
         );
 
         const thinking = out.find((c: any) => c.type === "thinking");
@@ -215,7 +220,7 @@ test("H — already-correct spelling produces no edit", () => {
                 type: "toolCall",
                 id: "call_1",
                 name: "read",
-                arguments: { path: join(base, "src/Kryxn.Core/Tasks/Foo.cs") },
+                arguments: { path: join(base, "src/AlphaModule/Tasks/Foo.cs") },
             },
         ];
         const { changed } = repairAssistantContent(content, base);
@@ -231,9 +236,9 @@ test("I — execution-time canonicalization core unchanged after refactor", () =
     try {
         // Structured read/write canonicalization (guard path) still corrects and
         // requires the right kind of resolution.
-        const read = resolveExistingPath(join(base, "src/Kry xn.Core/Tasks/Foo.cs"), base);
+        const read = resolveExistingPath(join(base, "src/Alpha Module/Tasks/Foo.cs"), base);
         expect(read.kind).toBe("corrected");
-        expect(read.path).toBe(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        expect(read.path).toBe(join(base, "src/AlphaModule/Tasks/Foo.cs"));
 
         // A write to a nonexistent parent is not silently created/corrected.
         const write = resolveWritePath(join(base, "src/Nope/Nope.cs"), base);
@@ -241,10 +246,10 @@ test("I — execution-time canonicalization core unchanged after refactor", () =
 
         // Shell quoted-path canonicalization still corrects on disk.
         const shell = canonicalizeQuotedShellPaths(
-            `cat "${join(base, "src/Kry xn.Core/Tasks/Foo.cs")}"`,
+            `cat "${join(base, "src/Alpha Module/Tasks/Foo.cs")}"`,
             base
         );
-        expect(shell.command).toContain(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        expect(shell.command).toContain(join(base, "src/AlphaModule/Tasks/Foo.cs"));
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
@@ -255,12 +260,12 @@ test("J — deterministic across repeated runs", () => {
     const base = scaffold();
     try {
         const input = [
-            { type: "text", text: "edit src/Kry xn.Core/Tasks/Foo.cs" },
+            { type: "text", text: "edit src/Alpha Module/Tasks/Foo.cs" },
             {
                 type: "toolCall",
                 id: "call_1",
                 name: "read",
-                arguments: { path: join(base, "src/Kry xn.Core/Tasks/Foo.cs") },
+                arguments: { path: join(base, "src/AlphaModule/Tasks/Foo.cs") },
             },
         ];
         const first = repairAssistantContent(JSON.parse(JSON.stringify(input)), base);
@@ -276,7 +281,7 @@ test("J — deterministic across repeated runs", () => {
 test("K — correction notification carries the canonical path", () => {
     const base = scaffold();
     try {
-        const canonical = join(base, "src/Kryxn.Core/Tasks/Foo.cs");
+        const canonical = join(base, "src/AlphaModule/Tasks/Foo.cs");
         const msg = buildCorrectionNotification("Path corrected", [canonical]);
         expect(msg).toContain(canonical);
     } finally {
@@ -285,12 +290,12 @@ test("K — correction notification carries the canonical path", () => {
 });
 
 // --------------------------------------------------------------------- L
-test("L — correction notification never carries the malformed spelling", () => {
+test("L — correction notification never carries the broken spelling", () => {
     const base = scaffold();
     try {
-        const canonical = join(base, "src/Kryxn.Core/Tasks/Foo.cs");
+        const canonical = join(base, "src/AlphaModule/Tasks/Foo.cs");
         const msg = buildCorrectionNotification("Path corrected", [canonical]);
-        expect(msg).not.toContain("Kry xn");
+        expect(msg).not.toContain("Alpha Module");
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
@@ -301,12 +306,12 @@ test("M — telemetry retains only canonical destinations", () => {
     const base = scaffold();
     try {
         const t = new CorrectionTelemetry();
-        t.record(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Foo.cs"));
         expect(t.counts.size).toBe(1);
         for (const key of t.counts.keys()) {
-            expect(key).not.toContain("Kry xn");
+            expect(key).not.toContain("Alpha Module");
         }
-        expect(t.report()[0].path).toBe(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        expect(t.report()[0].path).toBe(join(base, "src/AlphaModule/Tasks/Foo.cs"));
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
@@ -318,9 +323,9 @@ test("N — correction count increments per successful repair", () => {
     try {
         const t = new CorrectionTelemetry();
         expect(t.total).toBe(0);
-        t.record(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
-        t.record(join(base, "src/Kryxn.Core/Tasks/Bar.cs"));
-        t.record(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Foo.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Bar.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Foo.cs"));
         expect(t.total).toBe(3);
     } finally {
         rmSync(base, { recursive: true, force: true });
@@ -332,18 +337,18 @@ test("O — repeated corrections aggregate to canonical destinations", () => {
     const base = scaffold();
     try {
         const t = new CorrectionTelemetry();
-        const foo = join(base, "src/Kryxn.Core/Tasks/Foo.cs");
+        const foo = join(base, "src/AlphaModule/Tasks/Foo.cs");
         t.record(foo);
         t.record(foo);
         t.record(foo);
-        t.record(join(base, "src/Kryxn.Core/Tasks/Bar.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Bar.cs"));
         const report = t.report();
         const fooEntry = report.find((r) => r.path === foo);
         expect(fooEntry?.count).toBe(3);
-        expect(report.find((r) => r.path === join(base, "src/Kryxn.Core/Tasks/Bar.cs"))?.count).toBe(1);
-        // never stores the malformed spelling
+        expect(report.find((r) => r.path === join(base, "src/AlphaModule/Tasks/Bar.cs"))?.count).toBe(1);
+        // never stores the broken spelling
         for (const key of t.counts.keys()) {
-            expect(key).not.toContain("Kry xn");
+            expect(key).not.toContain("Alpha Module");
         }
     } finally {
         rmSync(base, { recursive: true, force: true });
@@ -355,14 +360,14 @@ test("P — /path-guard reports enabled, authorized root, count, canonical desti
     const base = scaffold();
     try {
         const t = new CorrectionTelemetry();
-        t.record(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
+        t.record(join(base, "src/AlphaModule/Tasks/Foo.cs"));
         const root = join(base, ".git-parent");
         const status = buildPathGuardStatus(root, t);
         expect(status).toContain("Pi Path Guard: ON");
         expect(status).toContain(`Root: ${root}`);
         expect(status).toContain("Corrections this session: 1");
-        expect(status).toContain(join(base, "src/Kryxn.Core/Tasks/Foo.cs"));
-        expect(status).not.toContain("Kry xn");
+        expect(status).toContain(join(base, "src/AlphaModule/Tasks/Foo.cs"));
+        expect(status).not.toContain("Alpha Module");
 
         // No root established -> still reports the ON status.
         expect(buildPathGuardStatus(undefined, t)).toContain("Root: none");

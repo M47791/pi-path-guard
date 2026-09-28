@@ -299,7 +299,7 @@ export function canonicalizeQuotedShellPaths(
  * Recover whitespace-corrupted unquoted filesystem paths conservatively.
  *
  * Example:
- *   src/Kry xn.Core/Tasks/File.cs
+ *   src/Mo dule/Tasks/File.cs
  *
  * may become:
  *   src\Example.Core\Tasks\File.cs
@@ -337,7 +337,7 @@ export function canonicalizeUnquotedShellPaths(
      *
      * For:
      *
-     *   Get-Content src/Kry xn.Core/Tasks/File.cs
+     *   Get-Content src/Mo dule/Tasks/File.cs
      *
      * this tests both:
      *
@@ -566,7 +566,7 @@ export function canonicalizeSetContentWriteTarget(
      *
      * Example:
      *
-     *   src/Kry xn.Application/Generated/NewFile.txt 'VALUE'
+     *   src/Mo dule/Generated/NewFile.txt 'VALUE'
      *
      * Candidate at the corruption boundary:
      *
