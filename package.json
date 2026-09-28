@@ -1,6 +1,6 @@
 {
   "name": "@m47791/pi-path-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Filesystem-backed path canonicalization and repository mutation containment for the Pi coding agent.",
   "license": "MIT",
   "keywords": [
@@ -17,5 +17,13 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M47791/pi-path-guard.git"
+  },
+  "homepage": "https://github.com/M47791/pi-path-guard#readme",
+  "bugs": {
+    "url": "https://github.com/M47791/pi-path-guard/issues"
   }
 }
