@@ -335,6 +335,34 @@ export function buildCorrectionNotification(
 }
 
 /**
+ * Build a *model-visible, successful-correction* reinforcement.
+ *
+ * This is appended to the model-facing projection of a turn whose tool call was
+ * repaired at the execution boundary. It teaches the model the authoritative
+ * canonical spelling so the misspelling is not repeated in later reasoning or
+ * filesystem operations.
+ *
+ * Canonical-only contract: this MUST expose ONLY the authoritative corrected
+ * path(s) (the canonical destination). It MUST NEVER contain the malformed /
+ * original spelling that was corrected, so the erroneous token sequence is
+ * never reinforced. Callers pass only canonical destinations.
+ *
+ * Bounded contract: destinations are de-duplicated and listed once, so a single
+ * repair produces the minimal information necessary. Callers should pass the
+ * canonical destination(s) for the repaired tool call(s).
+ */
+export function buildModelCorrection(canonicalDestinations: string[]): string {
+    const unique = [...new Set(canonicalDestinations)];
+
+    return [
+        "Path Guard corrected a filesystem path in the preceding operation.",
+        "The filesystem-authoritative canonical path is:",
+        ...unique,
+        "Use this canonical spelling in subsequent reasoning and filesystem operations.",
+    ].join("\n");
+}
+
+/**
  * Bounded, canonical-only session telemetry for successful corrections.
  *
  * Retains the exact total correction count plus an aggregated per-destination

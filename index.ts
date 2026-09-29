@@ -14,10 +14,31 @@ import {
 import {
     buildContextEditDraft,
     buildCorrectionNotification,
+    buildModelCorrection,
     buildPathGuardStatus,
     CorrectionTelemetry,
     repairAssistantContent,
 } from "./repair.ts";
+import { formatVersionPrefix, getPackageVersion } from "./version.ts";
+
+function isToolCallItem(item: unknown): item is { type: "toolCall"; id: string } {
+    return (
+        typeof item === "object" &&
+        item !== null &&
+        (item as { type?: unknown }).type === "toolCall" &&
+        typeof (item as { id?: unknown }).id === "string"
+    );
+}
+
+/**
+ * Bounded, per-turn ledger of tool-call repairs made at the execution boundary.
+ *
+ * Keyed by toolCallId and cleared at each turn_end, so at most one turn's
+ * repairs are ever held. Values are the canonical (already de-duplicated)
+ * destinations the model must learn. The malformed/original spelling is NEVER
+ * stored here.
+ */
+const toolCorrections = new Map<string, string[]>();
 
 function isShellTool(event: ToolCallEvent): boolean {
     return (
@@ -174,11 +195,15 @@ export default function (pi: ExtensionAPI) {
                 ? "NO GIT ROOT"
                 : `root: ${repositoryRoot}`;
 
+        // Version derives from package.json (single source of truth), so the
+        // footer can never drift from the installed package version again.
+        const version = getPackageVersion();
+
         ctx.ui.setStatus(
             "path-canonicalizer",
             ctx.ui.theme.fg(
                 "accent",
-                `Pi Path Guard v0.1.0: ON | ${rootStatus}`
+                `${formatVersionPrefix(version)} | ${rootStatus}`
             )
         );
 
@@ -352,6 +377,8 @@ export default function (pi: ExtensionAPI) {
         if (result.kind === "corrected") {
             setStructuredPath(event, result.path);
             telemetry.record(result.path);
+            // Execution-boundary repair: teach the model the canonical spelling.
+            toolCorrections.set(event.toolCallId, [result.path]);
 
             ctx.ui.notify(
                 buildCorrectionNotification(
@@ -382,23 +409,53 @@ export default function (pi: ExtensionAPI) {
             ctx.cwd
         );
 
-        if (!changed) return;
+        // Collect canonical destinations for any tool call this turn that was
+        // repaired at the execution boundary. This is the model-visible
+        // reinforcement: the model learns the authoritative canonical spelling.
+        // Destinations are de-duplicated so one repair yields minimal output.
+        const correctedDestinations: string[] = [];
+        for (const item of event.message.content) {
+            if (isToolCallItem(item)) {
+                const dests = toolCorrections.get(item.id);
+                if (dests) correctedDestinations.push(...dests);
+            }
+        }
+        const uniqueDestinations = [...new Set(correctedDestinations)];
 
-        event.entries.push(
-            buildContextEditDraft(event.messageEntryId, content)
-        );
+        // Merge the silent turn_end canonicalization with the execution-boundary
+        // reinforcement into a single context_edit for this entry.
+        let projectedContent = changed
+            ? content
+            : event.message.content;
 
-        for (const repair of repairs) {
-            telemetry.record(repair.actual);
+        if (uniqueDestinations.length > 0) {
+            projectedContent = [
+                ...projectedContent,
+                { type: "text", text: buildModelCorrection(uniqueDestinations) },
+            ];
         }
 
-        ctx.ui.notify(
-            buildCorrectionNotification(
-                `Path spelling repaired for the next model turn (${repairs.length}):`,
-                repairs.map((repair) => repair.actual)
-            ),
-            "warning"
-        );
+        if (changed || uniqueDestinations.length > 0) {
+            event.entries.push(
+                buildContextEditDraft(event.messageEntryId, projectedContent)
+            );
+
+            for (const repair of repairs) {
+                telemetry.record(repair.actual);
+            }
+
+            ctx.ui.notify(
+                buildCorrectionNotification(
+                    `Path spelling repaired for the next model turn (${repairs.length}):`,
+                    repairs.map((repair) => repair.actual)
+                ),
+                "warning"
+            );
+        }
+
+        // Bounded ledger: drop this turn's repair records so at most one turn's
+        // worth of repairs is ever held — the ledger cannot grow across turns.
+        toolCorrections.clear();
 
         return;
     });

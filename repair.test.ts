@@ -9,7 +9,7 @@
 
 import { test } from "bun:test";
 import { expect } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -17,6 +17,7 @@ import { execFileSync } from "node:child_process";
 import {
     buildContextEditDraft,
     buildCorrectionNotification,
+    buildModelCorrection,
     buildPathGuardStatus,
     CorrectionTelemetry,
     repairAssistantContent,
@@ -27,6 +28,7 @@ import {
     resolveExistingPath,
     resolveWritePath,
 } from "./canonicalize.ts";
+import { formatVersionPrefix, getPackageVersion } from "./version.ts";
 
 function scaffold(): string {
     const base = mkdtempSync(join(tmpdir(), "pi-path-guard-"));
@@ -395,4 +397,54 @@ test("Q — end-to-end blocking (extension factory + jiti): blocks out-of-root w
     });
     expect(out).toContain("E2E PASS");
     expect(out).not.toContain("FAIL");
+});
+
+// --------------------------------------------------------------------- R
+test("R — model-visible correction carries the canonical path (canonical-only)", () => {
+    const base = scaffold();
+    try {
+        const canonical = join(base, "src/AlphaModule/Tasks/Foo.cs");
+        const msg = buildModelCorrection([canonical]);
+        expect(msg).toContain(canonical);
+        // MUST NOT repeat the malformed spelling (no reinforcement of the error).
+        expect(msg).not.toContain("Alpha Module");
+    } finally {
+        rmSync(base, { recursive: true, force: true });
+    }
+});
+
+// --------------------------------------------------------------------- S
+test("S — model-visible correction deduplicates identical canonical destinations", () => {
+    const base = scaffold();
+    try {
+        const canonical = join(base, "src/AlphaModule/Tasks/Foo.cs");
+        // Two repaired references to the SAME canonical destination.
+        const msg = buildModelCorrection([canonical, canonical, canonical]);
+        // Listed exactly once (compact, bounded).
+        const occurrences = msg.split(canonical).length - 1;
+        expect(occurrences).toBe(1);
+        // Distinct destinations each appear.
+        const other = join(base, "src/AlphaModule/Tasks/Bar.cs");
+        const deduped = buildModelCorrection([canonical, other, canonical, other]);
+        const otherCount = deduped.split(other).length - 1;
+        expect(otherCount).toBe(1);
+    } finally {
+        rmSync(base, { recursive: true, force: true });
+    }
+});
+
+// --------------------------------------------------------------------- V
+test("V — displayed version derives from package.json (single source of truth)", () => {
+    // The authoritative version source is package.json.
+    const manifestPath = new URL("./package.json", import.meta.url);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: string };
+    expect(typeof manifest.version).toBe("string");
+
+    // getPackageVersion() reads that exact manifest — no duplicated constant.
+    expect(getPackageVersion()).toBe(manifest.version!);
+
+    // The footer prefix the extension renders is built from that version, so a
+    // package bump flows straight through to the displayed version.
+    const displayed = formatVersionPrefix(getPackageVersion());
+    expect(displayed).toBe(`Pi Path Guard v${manifest.version}: ON`);
 });

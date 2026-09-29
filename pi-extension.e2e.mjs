@@ -15,7 +15,7 @@
 // Exit: 0 = all pass, 1 = any failure
 
 import { createJiti } from "C:/Users/M4779/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -78,6 +78,7 @@ chk("M — tool_call handler registered", h.handlers.has("tool_call"));
 chk("N — turn_end handler registered", h.handlers.has("turn_end"));
 chk("O — path-guard command registered", h.commands.has("path-guard"));
 
+let footer = "";
 // === S: session_start establishes repo root ===
 const base = makeTestRepo();
 const repoDir = base;
@@ -96,11 +97,19 @@ await h.handlers.get("session_start")(
         cwd: base,
         ui: {
             notify: (m, t) => h.notifs.push({ msg: m, type: t }),
-            setStatus: () => {},
+            setStatus: (id, msg) => { footer = msg; },
             theme: { fg: (_, t) => t },
         },
     }
 );
+
+// === CHANGE 2: version drift guard ===
+// The footer text captured above must display the version from package.json.
+const pkgVersion = JSON.parse(
+    readFileSync(new URL("./package.json", import.meta.url), "utf8")
+).version;
+chk("VA — footer is the Pi Path Guard footer", footer.includes("Pi Path Guard"));
+chk("VB — footer displays package.json version (drift guard)", footer.includes(`v${pkgVersion}`));
 
 // === T-V: tool_call blocking (out-of-repo write) ===
 const toolCall = h.handlers.get("tool_call");
@@ -315,6 +324,123 @@ for (const entry of rawEntries) {
     }
 }
 chk("AK — raw history still has original broken path (append-only)", rawHasBroken);
+
+// =========================================================
+// CHANGE 1: MODEL-VISIBLE CORRECTION AFTER TOOL-CALL REPAIR
+// Real extension tool_call -> turn_end flow, inspected for a
+// canonical-only model-visible correction (no broken spelling).
+// =========================================================
+console.log("\n=== CHANGE 1: model-visible correction tests ===\n");
+
+// Drive a tool_call repair, then turn_end for the SAME assistant message that
+// carried the repaired tool call. Returns the context_edits the handler pushed.
+async function drive(toolCallId, toolName, inputArgs, msgArgs) {
+    const corrEntries = [];
+    await toolCall({
+        type: "tool_call", toolCallId, toolName,
+        input: inputArgs, entries: [],
+    }, ctxNotify);
+    await turnEnd({
+        message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: msgArgs }],
+        },
+        messageEntryId: `entry_${toolCallId}`,
+        entries: corrEntries,
+    }, ctxNotify);
+    return corrEntries;
+}
+
+// Extract the concatenated text blocks of every context_edit replacement.
+function correctionText(entries) {
+    let text = "";
+    for (const e of entries) {
+        if (e.type === "context_edit") {
+            for (const item of e.replacement.content) {
+                if (item.type === "text") text += item.text + "\n";
+            }
+        }
+    }
+    return text;
+}
+
+// 1-4,6-7: a malformed but repairable read at the tool-call boundary is
+// repaired to the canonical path and the model receives a canonical-only
+// model-visible correction (no broken spelling).
+h.notifs.length = 0;
+const corrEntries = await drive(
+    "corr_r1",
+    "read",
+    { path: join(repoDir, brokenFoo), name: "read", id: "corr_r1", thoughtSignature: "sig", namespace: "builtin" },
+    { path: join(repoDir, brokenFoo) }
+);
+const corrText = correctionText(corrEntries);
+chk("1 — tool_call repaired a malformed read (canonical)", corrText.includes(canonicalFoo));
+chk("2 — operation used the canonical path", corrText.includes(canonicalFoo));
+chk("3 — model-visible correction present", corrText.includes("Path Guard corrected"));
+chk("4 — correction carries the canonical path", corrText.includes(canonicalFoo));
+chk("5 — correction omits the broken spelling",
+    corrText.includes("Path Guard corrected") && !corrText.includes("Alpha Module"));
+// 7a: an out-of-repo write blocks at the tool-call boundary and yields no
+// model-visible correction (security behavior is preserved).
+h.notifs.length = 0;
+const blockedWriteEntries = await drive(
+    "corr_w_block",
+    "write",
+    { path: join(outsideBase, "dir", "file.txt"), content: "x", name: "write", id: "corr_w_block", thoughtSignature: "sig", namespace: "builtin" },
+    { path: join(outsideBase, "dir", "file.txt"), content: "x" }
+);
+chk("7a — blocked write produces NO correction",
+    !correctionText(blockedWriteEntries).includes("Path Guard corrected"));
+
+// 6: a path that was ALREADY canonical receives no execution-boundary correction.
+h.notifs.length = 0;
+const noCorrEntries = await drive(
+    "corr_r_ok",
+    "read",
+    { path: canonicalFoo, name: "read", id: "corr_r_ok", thoughtSignature: "sig", namespace: "builtin" },
+    { path: canonicalFoo }
+);
+chk("6 — no correction for an already-canonical read", !correctionText(noCorrEntries).includes("Path Guard corrected"));
+
+// 7b: an ambiguous (unresolvable) read blocks and yields no correction.
+h.notifs.length = 0;
+const corrAmbig = await drive(
+    "corr_r_amb",
+    "read",
+    { path: join(repoDir, "src/Nope Module/Tasks/Foo.cs"), name: "read", id: "corr_r_amb", thoughtSignature: "sig", namespace: "builtin" },
+    { path: join(repoDir, "src/Nope Module/Tasks/Foo.cs") }
+);
+chk("7b — ambiguous read produces NO correction", !correctionText(corrAmbig).includes("Path Guard corrected"));
+
+// 8: two repaired references to the SAME canonical destination are deduplicated.
+h.notifs.length = 0;
+await toolCall({
+    type: "tool_call", toolCallId: "corr_d1", toolName: "read",
+    input: { path: join(repoDir, brokenFoo), name: "read", id: "corr_d1", thoughtSignature: "sig", namespace: "builtin" },
+    entries: [],
+}, ctxNotify);
+await toolCall({
+    type: "tool_call", toolCallId: "corr_d2", toolName: "read",
+    input: { path: join(repoDir, brokenFoo), name: "read", id: "corr_d2", thoughtSignature: "sig", namespace: "builtin" },
+    entries: [],
+}, ctxNotify);
+const dedupEntries = [];
+await turnEnd({
+    message: {
+        role: "assistant",
+        content: [
+            { type: "toolCall", id: "corr_d1", name: "read", arguments: { path: join(repoDir, brokenFoo) } },
+            { type: "toolCall", id: "corr_d2", name: "read", arguments: { path: join(repoDir, brokenFoo) } },
+        ],
+    },
+    messageEntryId: "entry_dedup",
+    entries: dedupEntries,
+}, ctxNotify);
+const dedupText = correctionText(dedupEntries);
+const canonicalOccurrences = dedupText.split(canonicalFoo).length - 1;
+chk("8 — identical canonical destinations deduplicated in correction", canonicalOccurrences === 1);
+chk("8b — deduplicated correction is canonical-only", dedupText.includes(canonicalFoo) && !dedupText.includes("Alpha Module"));
 
 // Cleanup
 rmSync(base, { recursive: true, force: true });
