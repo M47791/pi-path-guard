@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, normalize, parse, relative, resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
@@ -179,6 +180,35 @@ function isPathInsideRepository(
         return false;
     }
 }
+/**
+ * Permit recognized mutations inside either the active repository
+ * or the OS temporary directory.
+ *
+ * Both roots reuse the existing lexical and physical containment
+ * checks. Junctions and symlinks cannot authorize escapes.
+ */
+export function isPathInsideAuthorizedRoots(
+    requestedPath: string,
+    cwd: string,
+    repositoryRoot: string
+): boolean {
+    if (isPathInsideRepository(requestedPath, cwd, repositoryRoot)) {
+        return true;
+    }
+
+    const temporaryRoot = normalize(resolve(tmpdir()));
+
+    // A malformed temp configuration must not authorize a drive root.
+    if (temporaryRoot === parse(temporaryRoot).root) {
+        return false;
+    }
+
+    return isPathInsideRepository(
+        requestedPath,
+        cwd,
+        temporaryRoot
+    );
+}
 export default function (pi: ExtensionAPI) {
     // Canonical-only, bounded session telemetry for successful corrections.
     // Retains the exact total correction count plus an aggregated per-
@@ -273,7 +303,7 @@ export default function (pi: ExtensionAPI) {
                 }
 
                 if (
-                    !isPathInsideRepository(
+                    !isPathInsideAuthorizedRoots(
                         shellWriteTarget,
                         ctx.cwd,
                         repositoryRoot
@@ -355,7 +385,7 @@ export default function (pi: ExtensionAPI) {
             }
 
             if (
-                !isPathInsideRepository(
+                !isPathInsideAuthorizedRoots(
                     effectivePath,
                     ctx.cwd,
                     repositoryRoot

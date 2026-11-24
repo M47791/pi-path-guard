@@ -17,7 +17,8 @@
 import { createJiti } from "C:/Users/M4779/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { SessionManager } from "C:/Users/M4779/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js";
@@ -87,9 +88,10 @@ const canonicalBar = join(repoDir, "src/AlphaModule/Tasks/Bar.cs");
 // "Alpha Module" with space — this file does NOT exist on disk
 // so resolveExistingPath detects it as misspelled and corrects to AlphaModule
 const brokenFoo = "src/Alpha Module/Tasks/Foo.cs";
-const outsideBase = mkdtempSync(join(tmpdir(), "pi-path-guard-outside-"));
-mkdirSync(join(outsideBase, "dir"), { recursive: true });
-writeFileSync(join(outsideBase, "dir", "file.txt"), "x");
+const outsideFile = join(
+    dirname(tmpdir()),
+    `pi-path-guard-denied-${process.pid}.txt`
+);
 
 await h.handlers.get("session_start")(
     { type: "session_start", reason: "new", cwd: base, root: undefined },
@@ -126,7 +128,7 @@ try {
     blockRes = await toolCall({
         type: "tool_call", toolCallId: "w1", toolName: "write",
         input: {
-            path: join(outsideBase, "dir", "file.txt"), content: "x",
+            path: outsideFile, content: "x",
             name: "write", id: "w1", thoughtSignature: "sig_w1", namespace: "builtin",
         },
         entries: [],
@@ -134,6 +136,85 @@ try {
 } catch {}
 chk("T — out-of-repo write blocked", blockRes && blockRes.block === true);
 chk("U — block reason is PATH_OUTSIDE_REPOSITORY", blockRes && String(blockRes.reason).includes("PATH_OUTSIDE_REPOSITORY"));
+
+
+// TEMP authorization through the actual Pi tool_call handler.
+const tempWriteResult = await toolCall({
+    type: "tool_call",
+    toolCallId: "temp-write-test",
+    toolName: "write",
+    input: {
+        path: join(tmpdir(), `path-guard-allowed-${process.pid}.tmp`),
+        content: "test",
+        name: "write",
+        id: "temp-write-test",
+        namespace: "builtin"
+    },
+    entries: []
+}, ctxNotify);
+
+chk("TEMP — structured write authorized",
+    !tempWriteResult?.block);
+// Supported positional Set-Content syntax only.
+// The handler inspects commands; no shell command executes.
+const shellCases = [
+    {
+        label: "direct PowerShell",
+        toolName: "powershell",
+        command: (path) => `Set-Content ${path} 'probe'`
+    },
+    {
+        label: "nested PowerShell via Bash",
+        toolName: "bash",
+        command: (path) =>
+            `pwsh -NoProfile -Command "Set-Content ${path} 'probe'"`
+    }
+];
+
+for (const [i, variant] of shellCases.entries()) {
+    const makeEvent = (destination, suffix) => ({
+        type: "tool_call",
+        toolCallId: `shell-${i}-${suffix}`,
+        toolName: variant.toolName,
+        input: {
+            command: variant.command(destination),
+            name: variant.toolName,
+            id: `shell-${i}-${suffix}`,
+            namespace: "builtin"
+        },
+        entries: []
+    });
+
+    const denied = await toolCall(
+        makeEvent(outsideFile, "outside"),
+        ctxNotify
+    );
+
+    chk(`SHELL — ${variant.label} blocks outside root`,
+        denied?.block === true &&
+        String(denied.reason).includes("PATH_OUTSIDE_REPOSITORY"));
+
+    const tempPath = join(
+        tmpdir(),
+        `path-guard-shell-${process.pid}-${i}.tmp`
+    );
+
+    const tempResult = await toolCall(
+        makeEvent(tempPath, "temp"),
+        ctxNotify
+    );
+
+    chk(`SHELL — ${variant.label} permits TEMP`,
+        !tempResult?.block);
+
+    const repoResult = await toolCall(
+        makeEvent(join(repoDir, `shell-${i}.tmp`), "repo"),
+        ctxNotify
+    );
+
+    chk(`SHELL — ${variant.label} permits repository`,
+        !repoResult?.block);
+}
 
 // === W-X: canonical-only notification for in-repo read (broken → canonical) ===
 h.notifs.length = 0;
@@ -225,7 +306,7 @@ sm.appendContextEdit(msgId, { content: repairedContent.content });
 // REAL COMPACTION: prepareCompaction reads the projection (same as Pi's full compaction)
 // prepareCompaction() internally calls buildSessionProjection(pathEntries) which applies
 // context_edits — proving compaction sees corrected content, not the original broken one.
-const { prepareCompaction } = await import("C:/Users/M4779/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js");
+const { prepareCompaction } = await import(pathToFileURL(join(PI_PKG, "dist/core/compaction/compaction.js")).href);
 const entries = sm.getEntries();
 const prep = prepareCompaction(entries, { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 });
 
@@ -387,8 +468,8 @@ h.notifs.length = 0;
 const blockedWriteEntries = await drive(
     "corr_w_block",
     "write",
-    { path: join(outsideBase, "dir", "file.txt"), content: "x", name: "write", id: "corr_w_block", thoughtSignature: "sig", namespace: "builtin" },
-    { path: join(outsideBase, "dir", "file.txt"), content: "x" }
+    { path: outsideFile, content: "x", name: "write", id: "corr_w_block", thoughtSignature: "sig", namespace: "builtin" },
+    { path: outsideFile, content: "x" }
 );
 chk("7a — blocked write produces NO correction",
     !correctionText(blockedWriteEntries).includes("Path Guard corrected"));

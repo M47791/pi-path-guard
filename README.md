@@ -24,7 +24,7 @@ Pi Path Guard:
 - Uses conservative whitespace-insensitive recovery when there is a unique filesystem-backed match.
 - Refuses ambiguous or unresolved structured paths rather than guessing.
 - Allows genuinely new filenames beneath verified existing parent paths.
-- Prevents recognized mutations from escaping the active Git repository.
+- Restricts recognized mutations to the active Git repository or verified OS temporary directory.
 - Resolves existing ancestors physically so symlinks and Windows junctions cannot trivially bypass repository containment.
 - Supports Pi structured path tools and conservative handling of recognized shell path patterns.
 
@@ -42,7 +42,7 @@ If the filesystem uniquely contains:
 
 Pi Path Guard can canonicalize the path before execution.
 
-For mutations, the effective destination must also remain inside the discovered Git repository.
+For mutations, the effective destination must remain inside an authorized write location.
 
 ## Installation
 
@@ -74,11 +74,36 @@ A successful load displays a status similar to:
 
 The initial release was developed and tested with Pi 0.87.1 on Windows. The implementation uses Node.js filesystem/path APIs, but other platforms have not yet received the same level of runtime testing.
 
+## Authorized write locations (v0.2.2)
+
+For recognized filesystem mutations, Path Guard permits destinations
+within either:
+
+1. The active authorized Git repository.
+2. The operating-system temporary directory returned by Node.js
+   `os.tmpdir()`.
+
+A valid Git repository root must still be established for mutation
+authorization to become active.
+
+Both locations use filesystem-backed lexical and physical containment
+checks. Existing ancestors are resolved physically to detect symbolic
+links and Windows junctions that escape the authorized root.
+
+Paths outside both authorized locations remain blocked for recognized
+mutations. An unresolved authorization decision fails closed.
+
+Allowing the OS temporary directory also permits writes to existing
+files inside that directory. This is an intentional compatibility
+trade-off, not a general authorization to write elsewhere.
+
+The policy applies to supported structured mutations and recognized
+shell write patterns. Path Guard is not a general-purpose shell sandbox.
 ## Safety model
 
 For structured path operations, Pi Path Guard resolves paths against the filesystem before execution.
 
-For mutations, it additionally verifies that the effective path remains within the discovered repository root.
+For mutations, it additionally verifies that the effective path remains within an authorized write location.
 
 Containment includes physical resolution of the deepest existing ancestor. This is intended to prevent an apparently in-repository path from escaping through a symbolic link or Windows junction whose physical destination lies outside the repository.
 
